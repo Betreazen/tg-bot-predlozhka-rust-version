@@ -2,6 +2,7 @@ pub mod admin;
 pub mod bot;
 pub mod config;
 pub mod db;
+pub mod import;
 pub mod model;
 pub mod publish;
 pub mod stats;
