@@ -1,0 +1,10 @@
+/CLAUDE.md
+/START_PROMPT.md
+/DEPLOY_NOTES.md
+/docs/PROGRESS.md
+/target
+/dist
+.env
+*.db
+*.db-*
+/graphify-out
