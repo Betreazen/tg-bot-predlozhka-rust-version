@@ -1,0 +1,16 @@
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+      - run: docker build -t tg-bot-predlozhka:ci .

@@ -1,0 +1,55 @@
+[Unit]
+Description=Telegram content suggestion bot (Rust)
+Documentation=https://github.com/Betreazen/tg-bot-predlozhka-rust-version
+Wants=network-online.target
+After=network-online.target
+# Keep retrying after long network outages instead of giving up.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=tg-bot-predlozhka
+Group=tg-bot-predlozhka
+WorkingDirectory=/opt/tg-bot-predlozhka
+# BOT_TOKEN, chats and ADMIN_IDS; mode 0600, owned by root.
+EnvironmentFile=/etc/tg-bot-predlozhka/bot.env
+Environment=DATA_DIR=/var/lib/tg-bot-predlozhka
+Environment=MESSAGES_PATH=/opt/tg-bot-predlozhka/messages.json
+# journald stores plain text; ANSI colors would show up as escape codes.
+Environment=NO_COLOR=1
+ExecStart=/opt/tg-bot-predlozhka/bot
+Restart=always
+RestartSec=5
+# The bot drains in-flight updates for up to 30 s after SIGTERM.
+TimeoutStopSec=40
+StateDirectory=tg-bot-predlozhka
+StateDirectoryMode=0700
+UMask=0077
+
+MemoryMax=128M
+CPUQuota=50%
+TasksMax=64
+
+# The bot only needs outbound HTTPS and its own data directory.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

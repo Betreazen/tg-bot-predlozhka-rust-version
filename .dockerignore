@@ -1,0 +1,12 @@
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!Dockerfile
+!src/
+!src/**
+!migrations/
+!migrations/**
+!messages.json
+!tests/
+!tests/**
