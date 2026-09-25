@@ -78,7 +78,7 @@
 | S2 | `scheduled` с прошедшим временем → публикуется сразу, с будущим — по оставшемуся времени | `recovery_service.py:76`; `test_recover_overdue_scheduled_publishes_now`, `test_recover_future_scheduled_reschedules_task`, `test_recover_overdue_failure_marks_failed` | = | |
 | S3 | `pending` > 10 → `⚠️ N предложений ожидают модерации` в админ-чат | `recovery_service.py:127`; `test_recover_pending_notifies_when_many` | = | |
 | S4 | Предложение, чья карточка не дошла до админов, остаётся `pending` и больше не показывается | `user_handlers.py:273` (комментарий обещает показ при восстановлении) | fix F9: при запуске такие карточки отправляются повторно | |
-| S5 | При каждом запуске два сообщения в админ-чат: `bot_restarted`, затем `bot_started` | `recovery_service.py:153`, `main.py:111`; `test_recover_pending_tasks_smoke_sends_restart_notice` | вопрос Q3 | |
+| S5 | При каждом запуске два сообщения в админ-чат: `bot_restarted`, затем `bot_started` | `recovery_service.py:153`, `main.py:111`; `test_recover_pending_tasks_smoke_sends_restart_notice` | одно сообщение `bot_started` (решение Q3) | |
 | S6 | Необработанная ошибка в обработчике: лог + alert `❌ Произошла ошибка. Попробуйте позже.` на кнопке | `main.py:24` | = | |
 
 ## Статистика
@@ -100,7 +100,7 @@
 | C2 | Postgres + Redis, Alembic `001_initial_schema` | SQLite, встроенная миграция; импорт данных Postgres подкомандой |
 | C3 | Логи в `logs/bot_YYYYMMDD.log` и stdout | stdout → journald; токен в логах маскируется |
 | C4 | Docker `HEALTHCHECK` каждые 30 с запускает новый Python-процесс (≈ 0,42 CPU-с на прогон) | Не переносится (см. DESIGN.md, «Причина CPU») |
-| C5 | `ERROR_CHAT_ID` обязателен, но нигде не используется | вопрос Q2 |
+| C5 | `ERROR_CHAT_ID` обязателен, но нигде не используется | ошибки публикации идут в `ERROR_CHAT_ID`, по умолчанию — в админ-чат (решение Q2) |
 
 ## Объявлено, но не подключено (не переносится)
 
