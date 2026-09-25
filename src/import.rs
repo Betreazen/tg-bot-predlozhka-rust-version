@@ -4,6 +4,7 @@ use crate::db::Database;
 use anyhow::{Context, Result, ensure};
 use jiff::{civil::DateTime, tz::TimeZone};
 use serde::{Deserialize, de::DeserializeOwned};
+use sqlx::SqliteConnection;
 use std::{fmt, path::Path};
 use teloxide::utils::html::escape;
 
@@ -107,6 +108,20 @@ fn seconds(value: &str) -> Result<i64> {
     Ok(civil.to_zoned(TimeZone::UTC)?.timestamp().as_second())
 }
 
+fn canonical_uuid(value: &str) -> Result<String> {
+    Ok(uuid::Uuid::parse_str(value)
+        .with_context(|| format!("invalid uuid {value:?}"))?
+        .to_string())
+}
+
+/// Telegram message ids fit in i32; reject anything else instead of truncating later.
+fn message_id(value: Option<i64>) -> Result<Option<i64>> {
+    if let Some(v) = value {
+        i32::try_from(v).with_context(|| format!("message id {v} out of range"))?;
+    }
+    Ok(value)
+}
+
 fn seconds_opt(value: Option<&str>) -> Result<Option<i64>> {
     value.map(seconds).transpose()
 }
@@ -128,7 +143,15 @@ pub async fn run(db: &Database, dir: &Path) -> Result<Summary> {
         "the database is not empty; import only into a fresh DATA_DIR"
     );
 
-    for u in &users {
+    insert_users(&mut tx, &users).await?;
+    insert_submissions(&mut tx, &submissions).await?;
+    insert_logs(&mut tx, &logs).await?;
+    tx.commit().await?;
+    summary(db).await
+}
+
+async fn insert_users(conn: &mut SqliteConnection, rows: &[PgUser]) -> Result<()> {
+    for u in rows {
         sqlx::query("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(u.user_id)
             .bind(&u.username)
@@ -139,11 +162,15 @@ pub async fn run(db: &Database, dir: &Path) -> Result<Summary> {
             .bind(u.total_submissions_count)
             .bind(seconds(&u.registration_timestamp)?)
             .bind(seconds(&u.last_interaction_timestamp)?)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .with_context(|| format!("user {}", u.user_id))?;
     }
-    for s in &submissions {
+    Ok(())
+}
+
+async fn insert_submissions(conn: &mut SqliteConnection, rows: &[PgSubmission]) -> Result<()> {
+    for s in rows {
         sqlx::query(
             "INSERT INTO submissions (submission_id, user_id, submission_ts, status, moderator_id, decision_ts,
                 show_authorship, message_id_in_admin_chat, message_id_in_channel, user_message_id, user_chat_id,
@@ -151,16 +178,16 @@ pub async fn run(db: &Database, dir: &Path) -> Result<Summary> {
                 publication_retry_count)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(uuid::Uuid::parse_str(&s.submission_id).context("invalid submission_id")?.to_string())
+        .bind(canonical_uuid(&s.submission_id)?)
         .bind(s.user_id)
         .bind(seconds(&s.submission_timestamp)?)
         .bind(&s.status)
         .bind(s.moderator_id)
         .bind(seconds_opt(s.decision_timestamp.as_deref())?)
         .bind(s.show_authorship)
-        .bind(s.message_id_in_admin_chat)
-        .bind(s.message_id_in_channel)
-        .bind(s.user_message_id)
+        .bind(message_id(s.message_id_in_admin_chat)?)
+        .bind(message_id(s.message_id_in_channel)?)
+        .bind(message_id(s.user_message_id)?)
         .bind(s.user_chat_id)
         .bind(s.has_media)
         .bind(&s.media_type)
@@ -170,25 +197,28 @@ pub async fn run(db: &Database, dir: &Path) -> Result<Summary> {
         .bind(seconds_opt(s.scheduled_publication_time.as_deref())?)
         .bind(&s.publication_error_message)
         .bind(s.publication_retry_count)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .with_context(|| format!("submission {}", s.submission_id))?;
     }
-    for l in &logs {
+    Ok(())
+}
+
+async fn insert_logs(conn: &mut SqliteConnection, rows: &[PgActionLog]) -> Result<()> {
+    for l in rows {
         sqlx::query("INSERT INTO admin_action_logs VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(l.log_id)
             .bind(&l.action_type)
             .bind(l.admin_user_id)
             .bind(l.target_user_id)
-            .bind(l.submission_id.as_deref().map(str::to_lowercase))
+            .bind(l.submission_id.as_deref().map(canonical_uuid).transpose()?)
             .bind(seconds(&l.action_timestamp)?)
             .bind(&l.additional_context)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .with_context(|| format!("admin action log {}", l.log_id))?;
     }
-    tx.commit().await?;
-    summary(db).await
+    Ok(())
 }
 
 pub async fn summary(db: &Database) -> Result<Summary> {

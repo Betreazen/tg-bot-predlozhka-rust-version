@@ -38,7 +38,7 @@ fn postgres_export(dir: &Path) {
         ]),
         json!([
             {"log_id":3,"action_type":"reject","admin_user_id":7,"target_user_id":42,
-             "submission_id":"0a2b3c4d-1111-4222-8333-944455556666","action_timestamp":"2026-09-02T00:01:00","additional_context":null}
+             "submission_id":"0A2B3C4D-1111-4222-8333-944455556666","action_timestamp":"2026-09-02T00:01:00","additional_context":null}
         ]),
     );
 }
@@ -121,4 +121,19 @@ async fn unexpected_columns_or_values_abort_the_whole_import() {
         db.user(1).await.unwrap().is_none(),
         "nothing is committed on failure"
     );
+}
+
+#[tokio::test]
+async fn out_of_range_message_ids_are_rejected() {
+    let data = tempfile::tempdir().unwrap();
+    let export = tempfile::tempdir().unwrap();
+    postgres_export(export.path());
+    let path = export.path().join("submissions.json");
+    let json = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"user_message_id\":5", "\"user_message_id\":4294967301");
+    std::fs::write(&path, json).unwrap();
+    let db = Database::open(data.path()).await.unwrap();
+    let err = import::run(&db, export.path()).await.err().unwrap();
+    assert!(format!("{err:#}").contains("out of range"), "{err:#}");
 }

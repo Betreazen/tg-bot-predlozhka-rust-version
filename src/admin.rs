@@ -263,18 +263,36 @@ async fn decide(
     else {
         return answer(bot, query, Some(&app.texts.admin.already_processed), true).await;
     };
+    if matches!(decision, Decision::ApprovePublish { .. }) {
+        app.wake.notify_one();
+    }
+    let (label, toast, notice, button) = decision_texts(app, decision);
+    tracing::info!(submission = %decided.submission_id, moderator, status = %decided.status, "decision made");
+    notify(bot, app, decided.user_id, notice, Some(button)).await;
+    let name = query
+        .from
+        .username
+        .clone()
+        .unwrap_or_else(|| moderator.to_string());
+    if let Err(error) = add_decision_footer(bot, app, query, label, &name).await {
+        tracing::warn!(error = %app.redact(&format!("{error:#}")), "admin card not updated");
+    }
+    answer(bot, query, Some(toast), false).await
+}
+
+/// Footer label, admin toast, author notification and its button (Python texts).
+fn decision_texts(
+    app: &App,
+    decision: Decision,
+) -> (&'static str, &'static str, &str, &'static str) {
     let n = &app.texts.notifications;
-    let (label, toast, notice, button) = match decision {
-        Decision::ApprovePublish { .. } => {
-            app.wake.notify_one();
-            let label = "Принято и запланировано к публикации";
-            (
-                label,
-                "✅ Принято и запланировано к публикации",
-                &n.approved_and_published,
-                "📝 Предложить ещё контент",
-            )
-        }
+    match decision {
+        Decision::ApprovePublish { .. } => (
+            "Принято и запланировано к публикации",
+            "✅ Принято и запланировано к публикации",
+            &n.approved_and_published,
+            "📝 Предложить ещё контент",
+        ),
         Decision::ApproveOnly => (
             "Принято без публикации",
             "✅ Принято без публикации",
@@ -287,18 +305,7 @@ async fn decide(
             &n.rejected,
             "🔄 Попробовать снова",
         ),
-    };
-    tracing::info!(submission = %decided.submission_id, moderator, status = %decided.status, "decision made");
-    notify(bot, app, decided.user_id, notice, Some(button)).await;
-    let name = query
-        .from
-        .username
-        .clone()
-        .unwrap_or_else(|| moderator.to_string());
-    if let Err(error) = add_decision_footer(bot, app, query, label, &name).await {
-        tracing::warn!(error = %app.redact(&format!("{error:#}")), "admin card not updated");
     }
-    answer(bot, query, Some(toast), false).await
 }
 
 /// Removes the buttons and appends the decision to the card, keeping its formatting.

@@ -102,7 +102,23 @@ async fn serve(config: Config, db: Database, texts: Texts) -> Result<()> {
 
     publish::startup(&bot, &app).await?;
     let worker = tokio::spawn(publish::run(bot.clone(), app.clone()));
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), bot = ?me.username, "bot started");
+    let result = dispatch(&bot, &app).await;
 
+    // Cleanup runs whatever the dispatcher returned.
+    app.flush_albums(&bot).await;
+    // A send in progress finishes and records its outcome; holding the lock
+    // keeps the worker from claiming another before it is stopped.
+    let _sending = tokio::time::timeout(SHUTDOWN_DRAIN, app.sending.lock()).await;
+    worker.abort();
+    let _ = worker.await;
+    app.db.close().await;
+    tracing::info!("bot stopped");
+    result
+}
+
+/// Polls until SIGTERM/Ctrl-C, then drains in-flight updates.
+async fn dispatch(bot: &Bot, app: &Arc<App>) -> Result<()> {
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(handle_message))
         .branch(Update::filter_callback_query().endpoint(handle_callback));
@@ -123,28 +139,21 @@ async fn serve(config: Config, db: Database, texts: Texts) -> Result<()> {
         .allowed_updates(vec![AllowedUpdate::Message, AllowedUpdate::CallbackQuery])
         .build();
     let shutdown = dispatcher.shutdown_token();
-    // reqwest errors carry the URL with the token, so the cause is not logged.
     let polling_errors = Arc::new(|_error: teloxide::RequestError| async {
         tracing::warn!("Telegram polling failed; retrying with backoff");
     });
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), bot = ?me.username, "bot started");
     let polling = dispatcher.try_dispatch_with_listener(listener, polling_errors);
     tokio::pin!(polling);
-    let result = tokio::select! {
+    tokio::select! {
         r = &mut polling => r.context("dispatcher stopped"),
         _ = stop_signal() => {
             let _drain = shutdown.shutdown();
-            tokio::time::timeout(SHUTDOWN_DRAIN, &mut polling)
-                .await
-                .context("shutdown drain timeout")?
-                .context("dispatcher stopped")
+            match tokio::time::timeout(SHUTDOWN_DRAIN, &mut polling).await {
+                Ok(r) => r.context("dispatcher stopped"),
+                Err(_) => anyhow::bail!("shutdown drain timeout"),
+            }
         }
-    };
-    worker.abort();
-    let _ = worker.await;
-    app.db.close().await;
-    tracing::info!("bot stopped");
-    result
+    }
 }
 
 async fn stop_signal() {

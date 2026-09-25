@@ -46,7 +46,11 @@ pub async fn run(bot: Bot, app: Arc<App>) {
 }
 
 pub async fn publish_due(bot: &Bot, app: &App) -> Result<()> {
-    while let Some(s) = app.db.claim_due(time::now()).await? {
+    loop {
+        let _sending = app.sending.lock().await;
+        let Some(s) = app.db.claim_due(time::now()).await? else {
+            return Ok(());
+        };
         match send(bot, app, &s).await {
             Ok(message) => {
                 app.db
@@ -74,7 +78,6 @@ pub async fn publish_due(bot: &Bot, app: &App) -> Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 /// Author line, footer and hashtags, appended to the submission text as in Python.

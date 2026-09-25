@@ -28,6 +28,9 @@ pub struct App {
     /// From getMe; commands addressed to other bots (`/stats@other`) are ignored.
     pub username: Option<String>,
     pub(crate) albums: Mutex<HashMap<String, Vec<Message>>>,
+    /// Held from claiming a publication until its outcome is stored. Shutdown
+    /// takes it so that a send in progress completes instead of being aborted.
+    pub sending: tokio::sync::Mutex<()>,
 }
 
 impl App {
@@ -40,6 +43,7 @@ impl App {
             album_delay: ALBUM_DELAY,
             username: None,
             albums: Mutex::default(),
+            sending: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -51,19 +55,37 @@ impl App {
     pub async fn finish_album(self: &Arc<Self>, bot: &Bot, group: &str) -> Result<()> {
         user::finish_album(bot, self, group).await
     }
+
+    /// Processes albums still waiting for their collection delay (used on shutdown).
+    pub async fn flush_albums(self: &Arc<Self>, bot: &Bot) {
+        let groups: Vec<String> = self
+            .albums
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        for group in groups {
+            if let Err(error) = self.finish_album(bot, &group).await {
+                tracing::error!(error = %self.redact(&format!("{error:#}")), "album not processed");
+            }
+        }
+    }
 }
 
 pub async fn handle_message(bot: Bot, message: Message, app: Arc<App>) -> Result<()> {
     if message.from.is_none() {
         return Ok(());
     }
-    // Commands come before the dialogue state: `/stats` is never taken as content.
-    if let Some(command) = command(&message, app.username.as_deref()) {
-        return match command {
-            "start" if message.chat.is_private() => user::start(&bot, &app, &message).await,
-            "stats" => stats::command(&bot, &app, &message).await,
-            _ => Ok(()),
-        };
+    // Known commands come before the dialogue state, so `/stats` is never taken
+    // as content. Other text starting with `/` is ordinary text, as in aiogram.
+    match command(&message, app.username.as_deref()) {
+        Some("start") if message.chat.is_private() => {
+            return user::start(&bot, &app, &message).await;
+        }
+        Some("start") => return Ok(()),
+        Some("stats") => return stats::command(&bot, &app, &message).await,
+        _ => {}
     }
     if !message.chat.is_private() {
         return Ok(());

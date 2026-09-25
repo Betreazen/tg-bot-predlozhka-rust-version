@@ -3,7 +3,7 @@ use crate::{
     admin,
     bot::{App, answer, keyboard, send_html, user_id},
     db::{NewSubmission, Profile},
-    model::{AlbumPart, Draft, MediaKind, Step},
+    model::{AlbumPart, Draft, MediaKind, Step, Submission},
     text::{caption_html, fill, message_html, plain},
     time,
 };
@@ -287,17 +287,7 @@ async fn submit(
     }
     let now = time::now();
     app.db.touch_user(&profile(&query.from), now).await?;
-    let new = NewSubmission {
-        user_id: uid,
-        user_chat_id: draft.chat_id,
-        user_message_id: draft.message_id.into(),
-        show_authorship,
-        text_content: draft.text,
-        media: draft.media,
-        album: (!draft.album.is_empty())
-            .then(|| serde_json::to_string(&draft.album))
-            .transpose()?,
-    };
+    let new = new_submission(uid, draft, show_authorship)?;
     let since = time::day_start(&app.config.timezone, now)?;
     let Some(submission) = app
         .db
@@ -308,26 +298,38 @@ async fn submit(
         return answer(bot, query, Some(&limit_text(app)), true).await;
     };
     tracing::info!(user = uid, submission = %submission.submission_id, "submission created");
-    let delivered = match admin::present(bot, app, &submission).await {
-        Ok(()) => true,
+    report_outcome(bot, app, uid, &submission).await?;
+    answer(bot, query, None, false).await
+}
+
+fn new_submission(uid: i64, draft: Draft, show_authorship: bool) -> Result<NewSubmission> {
+    Ok(NewSubmission {
+        user_id: uid,
+        user_chat_id: draft.chat_id,
+        user_message_id: draft.message_id.into(),
+        show_authorship,
+        text_content: draft.text,
+        media: draft.media,
+        album: (!draft.album.is_empty())
+            .then(|| serde_json::to_string(&draft.album))
+            .transpose()?,
+    })
+}
+
+/// Sends the card to the admins and tells the author whether it got there.
+async fn report_outcome(bot: &Bot, app: &App, uid: i64, submission: &Submission) -> Result<()> {
+    let t = &app.texts.user;
+    let text = match admin::present(bot, app, submission).await {
+        Ok(()) => &t.submission_accepted,
         Err(error) => {
             // Stays pending without a card; it is presented again at the next start.
-            tracing::error!(submission = %submission.submission_id, error = %app.redact(&format!("{error:#}")), "moderation card not delivered");
-            false
+            let error = app.redact(&format!("{error:#}"));
+            tracing::error!(submission = %submission.submission_id, %error, "moderation card not delivered");
+            &t.error_occurred
         }
     };
-    let t = &app.texts.user;
-    send_html(
-        bot,
-        uid,
-        if delivered {
-            &t.submission_accepted
-        } else {
-            &t.error_occurred
-        },
-    )
-    .await?;
-    answer(bot, query, None, false).await
+    send_html(bot, uid, text).await?;
+    Ok(())
 }
 
 fn profile(user: &teloxide::types::User) -> Profile<'_> {

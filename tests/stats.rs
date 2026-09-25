@@ -146,3 +146,46 @@ async fn navigation_edits_the_message() {
         "⛔️ Только для администраторов"
     );
 }
+
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn network_errors_are_logged_without_the_token() {
+    // reqwest puts the request URL, including the token, into its error text.
+    let e = setup().await;
+    let logs = Captured::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let offline =
+        teloxide::Bot::new("123:fake").set_api_url("http://127.0.0.1:9/".parse().unwrap());
+    let _ = tg_bot_predlozhka::bot::handle_message(
+        offline.clone(),
+        group_text(1, ADMIN, "/stats"),
+        e.app.clone(),
+    )
+    .await;
+    let _ = tg_bot_predlozhka::bot::handle_callback(
+        offline,
+        admin_cb(ADMIN, "stats:2025:3", json!({"text":"old"})),
+        e.app.clone(),
+    )
+    .await;
+    let out = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(out.contains("statistics failed"), "{out}");
+    assert!(!out.contains("123:fake"), "{out}");
+}

@@ -333,3 +333,38 @@ async fn token_is_redacted_from_error_text() {
         "GET https://api/bot[REDACTED]/x failed"
     );
 }
+
+#[tokio::test]
+async fn shutdown_waits_for_a_send_in_progress_and_blocks_new_claims() {
+    // Aborting the worker mid-send left rows in `publishing` and a false
+    // "check the channel" alert after every routine restart.
+    let e = setup().await;
+    let s = submit(&e, USER, text(2, USER, "пост"), true).await;
+    approve(&e, &s).await;
+    let guard = e.app.sending.lock().await;
+    let task = {
+        let (bot, app) = (e.bot.clone(), e.app.clone());
+        tokio::spawn(async move { publish::publish_due(&bot, &app).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        reload(&e, &s).await.status,
+        status::SCHEDULED,
+        "no claim while shutdown holds the lock"
+    );
+    drop(guard);
+    task.await.unwrap().unwrap();
+    assert_eq!(reload(&e, &s).await.status, status::PUBLISHED);
+}
+
+#[tokio::test]
+async fn pending_album_parts_are_flushed_on_shutdown() {
+    let e = setup().await;
+    cb(&e, user_cb(USER, "suggest_content")).await;
+    msg(&e, photo(11, USER, 10, json!({"media_group_id":"g"}))).await;
+    e.app.flush_albums(&e.bot).await;
+    assert_eq!(
+        calls_to(&e.server, "SendMessage").await.last().unwrap()["text"],
+        e.app.texts.user.submission_received
+    );
+}

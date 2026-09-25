@@ -41,85 +41,104 @@ impl Config {
     }
 
     pub fn parse(get: impl Fn(&str) -> Option<String>) -> Result<Self> {
-        let value = |key: &str| {
-            get(key)
-                .map(|v| clean(&v).to_owned())
-                .filter(|v| !v.is_empty())
-        };
-        let required = |key: &str| value(key).with_context(|| format!("{key} is required"));
-        fn number<T: FromStr>(key: &str, raw: Option<String>, default: T) -> Result<T> {
-            raw.map(|s| {
-                s.parse::<T>()
-                    .ok()
-                    .with_context(|| format!("invalid {key}"))
-            })
-            .transpose()
-            .map(|n| n.unwrap_or(default))
-        }
-        let positive = |key: &str, default: i64| -> Result<i64> {
-            let n = number(key, value(key), default)?;
-            ensure!(n > 0, "{key} must be positive");
-            Ok(n)
-        };
-        let flag = |key: &str| -> Result<bool> {
-            match value(key).map(|v| v.to_ascii_lowercase()).as_deref() {
-                None | Some("true" | "1" | "yes") => Ok(true),
-                Some("false" | "0" | "no") => Ok(false),
-                Some(_) => bail!("invalid {key}: expected true or false"),
-            }
-        };
-
-        let token = required("BOT_TOKEN")?;
-        let channel_id = number("CHANNEL_ID", Some(required("CHANNEL_ID")?), 0)?;
-        let admin_chat_id = number("ADMIN_CHAT_ID", Some(required("ADMIN_CHAT_ID")?), 0)?;
-        let error_chat_id = number("ERROR_CHAT_ID", value("ERROR_CHAT_ID"), admin_chat_id)?;
-        let mut admin_ids = HashSet::new();
-        for part in value("ADMIN_IDS").unwrap_or_default().split([',', ';']) {
-            let part = part.trim();
-            if !part.is_empty() {
-                admin_ids.insert(part.parse::<i64>().ok().with_context(|| {
-                    format!("invalid ADMIN_IDS entry {part:?}: expected integer user IDs")
-                })?);
-            }
-        }
-        let tz_name = value("TIMEZONE").unwrap_or_else(|| "Europe/Moscow".into());
-        let timezone =
-            TimeZone::get(&tz_name).with_context(|| format!("invalid TIMEZONE {tz_name:?}"))?;
-
+        let env = Env(get);
+        let token = env.required("BOT_TOKEN")?;
+        let admin_chat_id = env.number("ADMIN_CHAT_ID", None)?;
         Ok(Self {
             token,
-            channel_id,
+            channel_id: env.number("CHANNEL_ID", None)?,
             admin_chat_id,
-            error_chat_id,
-            admin_ids,
-            data_dir: value("DATA_DIR").unwrap_or_else(|| "data".into()).into(),
-            messages_path: value("MESSAGES_PATH")
+            error_chat_id: env.number("ERROR_CHAT_ID", Some(admin_chat_id))?,
+            admin_ids: env.admin_ids()?,
+            data_dir: env
+                .value("DATA_DIR")
+                .unwrap_or_else(|| "data".into())
+                .into(),
+            messages_path: env
+                .value("MESSAGES_PATH")
                 .unwrap_or_else(|| "messages.json".into())
                 .into(),
-            submissions_per_day: positive("SUBMISSIONS_PER_DAY", 2)?,
-            timezone,
-            publication_delay_seconds: number(
-                "PUBLICATION_DELAY_MINUTES",
-                value("PUBLICATION_DELAY_MINUTES"),
-                2u32,
-            )? as i64
+            submissions_per_day: env.positive("SUBMISSIONS_PER_DAY", 2)?,
+            timezone: env.timezone()?,
+            publication_delay_seconds: env.number::<u32>("PUBLICATION_DELAY_MINUTES", Some(2))?
+                as i64
                 * 60,
-            max_file_size_mb: positive("MAX_FILE_SIZE_MB", 200)? as u64,
-            footer_text: get("FOOTER_TEXT")
-                .map(|v| clean(&v).to_owned())
-                .unwrap_or_default(),
-            hashtags: get("HASHTAGS")
-                .map(|v| clean(&v).to_owned())
-                .unwrap_or_default(),
-            require_confirmation: flag("REQUIRE_CONFIRMATION")?,
-            enable_blocking: flag("ENABLE_BLOCKING")?,
-            max_retry_attempts: positive("MAX_RETRY_ATTEMPTS", 2)?,
-            retry_delay_seconds: number("RETRY_DELAY_SECONDS", value("RETRY_DELAY_SECONDS"), 30u32)?
-                as i64,
+            max_file_size_mb: env.positive("MAX_FILE_SIZE_MB", 200)? as u64,
+            footer_text: env.verbatim("FOOTER_TEXT"),
+            hashtags: env.verbatim("HASHTAGS"),
+            require_confirmation: env.flag("REQUIRE_CONFIRMATION")?,
+            enable_blocking: env.flag("ENABLE_BLOCKING")?,
+            max_retry_attempts: env.positive("MAX_RETRY_ATTEMPTS", 2)?,
+            retry_delay_seconds: env.number::<u32>("RETRY_DELAY_SECONDS", Some(30))? as i64,
         })
     }
 
     pub fn is_admin(&self, user_id: i64) -> bool {
         self.admin_ids.contains(&user_id)
+    }
+}
+
+struct Env<F>(F);
+
+impl<F: Fn(&str) -> Option<String>> Env<F> {
+    fn value(&self, key: &str) -> Option<String> {
+        (self.0)(key)
+            .map(|v| clean(&v).to_owned())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Footer and hashtags may legitimately be empty.
+    fn verbatim(&self, key: &str) -> String {
+        (self.0)(key)
+            .map(|v| clean(&v).to_owned())
+            .unwrap_or_default()
+    }
+
+    fn required(&self, key: &str) -> Result<String> {
+        self.value(key)
+            .with_context(|| format!("{key} is required"))
+    }
+
+    /// `default: None` makes the value required.
+    fn number<T: FromStr>(&self, key: &str, default: Option<T>) -> Result<T> {
+        match (self.value(key), default) {
+            (Some(raw), _) => raw.parse().ok().with_context(|| format!("invalid {key}")),
+            (None, Some(default)) => Ok(default),
+            (None, None) => bail!("{key} is required"),
+        }
+    }
+
+    fn positive(&self, key: &str, default: i64) -> Result<i64> {
+        let n = self.number(key, Some(default))?;
+        ensure!(n > 0, "{key} must be positive");
+        Ok(n)
+    }
+
+    fn flag(&self, key: &str) -> Result<bool> {
+        match self.value(key).map(|v| v.to_ascii_lowercase()).as_deref() {
+            None | Some("true" | "1" | "yes") => Ok(true),
+            Some("false" | "0" | "no") => Ok(false),
+            Some(_) => bail!("invalid {key}: expected true or false"),
+        }
+    }
+
+    fn admin_ids(&self) -> Result<HashSet<i64>> {
+        let raw = self.value("ADMIN_IDS").unwrap_or_default();
+        raw.split([',', ';'])
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                part.parse::<i64>().ok().with_context(|| {
+                    format!("invalid ADMIN_IDS entry {part:?}: expected integer user IDs")
+                })
+            })
+            .collect()
+    }
+
+    fn timezone(&self) -> Result<TimeZone> {
+        let name = self
+            .value("TIMEZONE")
+            .unwrap_or_else(|| "Europe/Moscow".into());
+        TimeZone::get(&name).with_context(|| format!("invalid TIMEZONE {name:?}"))
     }
 }

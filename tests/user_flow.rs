@@ -509,3 +509,36 @@ async fn undelivered_card_tells_the_user_and_keeps_the_submission() {
         (status::PENDING, None)
     );
 }
+
+#[tokio::test]
+async fn slash_text_that_is_not_a_known_command_is_content() {
+    // aiogram's Command() only caught /start and /stats; "/r/foo" was a submission.
+    let e = setup().await;
+    cb(&e, user_cb(USER, "suggest_content")).await;
+    msg(&e, text(2, USER, "/r/foo интересно")).await;
+    let (step, draft) = e.app.db.dialogue(USER).await.unwrap().unwrap();
+    assert_eq!(step, Step::WaitingForConfirmation);
+    assert_eq!(draft.unwrap().text.as_deref(), Some("/r/foo интересно"));
+}
+
+#[tokio::test]
+async fn handler_errors_stop_the_spinner_with_an_alert() {
+    // S6: Python's global error handler answered the callback.
+    let e = setup().await;
+    e.app.db.close().await;
+    let result = tg_bot_predlozhka::bot::handle_callback(
+        e.bot.clone(),
+        user_cb(USER, "suggest_content"),
+        e.app.clone(),
+    )
+    .await;
+    assert!(result.is_err());
+    let a = calls_to(&e.server, "AnswerCallbackQuery")
+        .await
+        .pop()
+        .unwrap();
+    assert_eq!(
+        (a["text"].as_str(), a["show_alert"].as_bool()),
+        (Some("❌ Произошла ошибка. Попробуйте позже."), Some(true))
+    );
+}

@@ -147,7 +147,7 @@ pub async fn command(bot: &Bot, app: &App, message: &Message) -> Result<()> {
     match result {
         Ok((text, markup)) => send_html(bot, chat, text).reply_markup(markup).await?,
         Err(error) => {
-            tracing::error!(error = %format!("{error:#}"), "statistics failed");
+            tracing::error!(error = %app.redact(&format!("{error:#}")), "statistics failed");
             send_html(bot, chat, FAILED).await?
         }
     };
@@ -185,7 +185,7 @@ pub async fn callback(bot: &Bot, app: &App, query: &CallbackQuery, data: &str) -
     match result {
         Ok(()) => answer(bot, query, None, false).await,
         Err(error) => {
-            tracing::error!(error = %format!("{error:#}"), "statistics failed");
+            tracing::error!(error = %app.redact(&format!("{error:#}")), "statistics failed");
             answer(bot, query, Some(FAILED), true).await
         }
     }
