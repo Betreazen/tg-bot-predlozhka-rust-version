@@ -155,3 +155,26 @@ pub fn plain(html: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&amp;", "&")
 }
+
+/// A message text or caption as HTML. teloxide's `html_text()` returns the text
+/// unescaped when it has no entities, so plain text goes through `escape` here.
+pub fn to_html(
+    text: Option<&str>,
+    entities: Option<&[teloxide::types::MessageEntity]>,
+) -> Option<String> {
+    let text = text?;
+    Some(match entities {
+        Some(entities) if !entities.is_empty() => {
+            teloxide::utils::render::Renderer::new(text, entities).as_html()
+        }
+        _ => teloxide::utils::html::escape(text),
+    })
+}
+
+pub fn message_html(message: &teloxide::types::Message) -> Option<String> {
+    to_html(message.text(), message.entities()).or_else(|| caption_html(message))
+}
+
+pub fn caption_html(message: &teloxide::types::Message) -> Option<String> {
+    to_html(message.caption(), message.caption_entities())
+}

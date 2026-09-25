@@ -72,6 +72,8 @@ pub enum MediaKind {
     Video,
     Document,
     Audio,
+    /// GIFs; the Python bot accepted them as documents.
+    Animation,
 }
 
 impl MediaKind {
@@ -81,6 +83,7 @@ impl MediaKind {
             Self::Video => "video",
             Self::Document => "document",
             Self::Audio => "audio",
+            Self::Animation => "animation",
         }
     }
 }
